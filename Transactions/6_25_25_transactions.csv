@@ -1,21 +1,20 @@
-From,To,Amount
-bigcrescendo,ddavidl (dl),5.0
-bigcrescendo,Mete910 (whale),37.0
-bigcrescendo,Michael Lu (egiant),45.51
-bigcrescendo,shaquillis (SHAQ) ,60.0
-bigcrescendo,asaltypepper,52.49
-MYL,asaltypepper,14.51
-MYL,weoou,76.0
-MYL,catlib (cat),59.49
-joonga,catlib (cat),20.51
-joonga,choohaz,99.49
-drew (ken),choohaz,23.51
-drew (ken),jack Seven (Mr Seven),76.49
-iv,jack Seven (Mr Seven),73.49
-seanyao (sean),jack Seven (Mr Seven),6.02
-seanyao (sean),Makkah (Lucky M),63.98
-MrLukahn,Makkah (Lucky M),50.0
-dougiebrown (dougie),Makkah (Lucky M),42.08
-jon ,Makkah (Lucky M),36.17
-PeanutJr,Makkah (Lucky M),257.77
-PeanutJr,PeanutJr,0.68
+From,To,Amount,Method
+bigcrescendo,ddavidl (dl),5.0,Pay user 5.00 on Venmo: @David-Lee-2243
+bigcrescendo,Mete910 (whale),37.0,Pay user 37.00 on Venmo
+bigcrescendo,Michael Lu (egiant),45.51,Pay user 45.51 on Venmo
+bigcrescendo,shaquillis (SHAQ) ,60.0,Pay user 60.00 on Zelle: 4083681224
+bigcrescendo,asaltypepper,52.49,Pay user 52.49 on Venmo: @nikhilpesaladinne
+MYL,asaltypepper,14.51,Pay user 14.51 on Venmo: @nikhilpesaladinne
+MYL,weoou,76.0,Pay user 76.00 on Venmo
+MYL,catlib (cat),59.49,Pay user 59.49 on Venmo
+joonga,catlib (cat),20.51,Pay user 20.51 on Venmo
+joonga,choohaz,99.49,Pay user 99.49 on Venmo
+drew (ken),choohaz,23.51,Pay user 23.51 on Venmo
+drew (ken),jack Seven (Mr Seven),76.49,Pay user 76.49 on Venmo
+iv,jack Seven (Mr Seven),73.49,Pay user 73.49 on Venmo
+seanyao (sean),jack Seven (Mr Seven),6.02,Pay user 6.02 on Venmo
+seanyao (sean),Makkah (Lucky M),63.98,Pay user 63.98 on Venmo
+MrLukahn,Makkah (Lucky M),50.0,Pay user 50.00 on Venmo
+dougiebrown (dougie),Makkah (Lucky M),42.08,Pay user 42.08 on Venmo
+jon ,Makkah (Lucky M),36.17,Pay user 36.17 on Venmo
+Bank,Makkah (Lucky M),257.09,Pay user 257.09 on Venmo
