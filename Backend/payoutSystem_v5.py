@@ -534,7 +534,7 @@ def main() -> None:
     # ---------- write CSV ----------
     date_tag = re.search(r"(\d{1,2}_\d{1,2}_\d{2})", ledger_path.stem)
     tag = date_tag.group(1) if date_tag else "output"
-    out_path = out_dir / f"{tag}_transactions_v7.csv"
+    out_path = out_dir / f"{tag}_transactions_v5.csv"
 
     with out_path.open("w", newline="") as f:
         wr = csv.writer(f)
