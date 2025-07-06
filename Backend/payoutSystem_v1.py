@@ -1287,241 +1287,241 @@
 
 
 
-#!/usr/bin/env python3
-"""
-Backend/payoutSystem.py
+# #!/usr/bin/env python3
+# """
+# Backend/payoutSystem.py
 
-Reads a Poker Ledger CSV, validates every player against
-Payment Type(s)/Payment Methods.csv (defaulting missing players to Venmo),
-then produces peer-to-peer transactions ≥ $1 (borrowing cents where possible),
-rolling any true “dust” under $1 back to the BANK for its final settlements,
-and appending each receiver’s payment handle.
-"""
+# Reads a Poker Ledger CSV, validates every player against
+# Payment Type(s)/Payment Methods.csv (defaulting missing players to Venmo),
+# then produces peer-to-peer transactions ≥ $1 (borrowing cents where possible),
+# rolling any true “dust” under $1 back to the BANK for its final settlements,
+# and appending each receiver’s payment handle.
+# """
 
-import argparse
-import os
-import sys
-import itertools
-from collections import defaultdict
-import pandas as pd
-
-
-def parse_currency(val):
-    if pd.isnull(val):
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).replace('$', '').replace(',', '').strip()
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+# import argparse
+# import os
+# import sys
+# import itertools
+# from collections import defaultdict
+# import pandas as pd
 
 
-def settle_transactions(csv_path, bank_name="BANK", min_peer_txn=1.0):
-    # 1) Load ledger CSV
-    df = pd.read_csv(csv_path)
-
-    # 2) Load Payment Methods, build pm_map: discord → full row or None
-    abs_csv      = os.path.abspath(csv_path)
-    ledger_dir   = os.path.dirname(abs_csv)
-    project_root = os.path.dirname(ledger_dir)
-
-    pm_path = None
-    for dname in ("Payment Types", "Payment Type"):
-        candidate = os.path.join(project_root, dname, "Payment Methods.csv")
-        if os.path.isfile(candidate):
-            pm_path = candidate
-            break
-
-    if pm_path is None:
-        print("✗ Error: cannot find Payment Methods.csv. Looked in:")
-        print(f"  • {os.path.join(project_root, 'Payment Types', 'Payment Methods.csv')}")
-        print(f"  • {os.path.join(project_root, 'Payment Type',  'Payment Methods.csv')}")
-        sys.exit(1)
-
-    pm_df = pd.read_csv(pm_path)
-    pm_map = {}
-    for _, row in pm_df.iterrows():
-        entry = str(row["Player Name"]).strip()
-        lower = entry.lower()
-        if "(" in entry and ")" in entry:
-            before = entry.split("(", 1)[0].strip().lower()
-            inside = entry.split("(", 1)[1].split(")", 1)[0].strip().lower()
-            pm_map[before] = row
-            pm_map[inside] = row
-        else:
-            pm_map[lower] = row
-
-    # 3) Warn about missing players but default them to Venmo
-    missing = []
-    for full in df["Player Name"].unique():
-        if pd.isnull(full):
-            continue
-        full_str = str(full).strip()
-        if not full_str:
-            continue
-        discord = full_str.split("(", 1)[0].strip().lower()
-        if discord not in pm_map:
-            missing.append(discord)
-            pm_map[discord] = None
-
-    if missing:
-        print("⚠ Warning: no payment methods found for these players; defaulting them to Venmo:")
-        for name in missing:
-            print(f"  • {name}")
-
-    # 4) Build raw debtor & creditor pools
-    base_debtors   = []
-    base_creditors = []
-    for _, row in df.iterrows():
-        name       = row["Player Name"]
-        credit_yes = str(row["Credit?"]).strip().lower() == "yes"
-        end_stack  = parse_currency(row["Ending Stack"])
-        pl         = parse_currency(row["P/L Player"])
-        send_out   = parse_currency(row["Send Out"])
-        sent       = parse_currency(row["$ Sent"])
-
-        if not credit_yes and end_stack > 0 and sent > 0:
-            base_creditors.append([name, sent])
-        elif credit_yes:
-            if pl < 0 and abs(send_out) > 0:
-                base_debtors.append([name, abs(send_out)])
-            elif pl > 0 and sent > 0:
-                base_creditors.append([name, sent])
-
-    # 5) Greedy-match helper
-    def simulate(dr, cr):
-        debtors   = [d.copy() for d in base_debtors]
-        creditors = [c.copy() for c in base_creditors]
-        debtors.sort(key=lambda x: x[1], reverse=dr)
-        creditors.sort(key=lambda x: x[1], reverse=cr)
-
-        matches = []
-        i = j = 0
-        while i < len(debtors) and j < len(creditors):
-            dn, da = debtors[i]
-            cn, ca = creditors[j]
-            x = min(da, ca)
-            matches.append({"From": dn, "To": cn, "Amount": round(x, 2)})
-            debtors[i][1]   -= x
-            creditors[j][1] -= x
-            if debtors[i][1]   < 1e-6:
-                i += 1
-            if creditors[j][1] < 1e-6:
-                j += 1
-
-        leftover_bank = sum(1 for k in range(i, len(debtors))   if debtors[k][1]   > 1e-6)
-        leftover_bank += sum(1 for k in range(j, len(creditors)) if creditors[k][1] > 1e-6)
-        return leftover_bank, len(matches) + leftover_bank, matches, debtors, creditors, i, j
-
-    # 6) Pick best sort-order strategy
-    best = None
-    for dr, cr in itertools.product([True, False], repeat=2):
-        lb, tt, m, dl, cl, di, cj = simulate(dr, cr)
-        if best is None or (lb, tt) < best[0]:
-            best = ((lb, tt), dr, cr, m, dl, cl, di, cj)
-
-    (_, _), debt_rev, cred_rev, matches, debtors, creditors, idx_d, idx_c = best
-
-    # 7) Split any < $1 peer matches by borrowing cents
-    to_bank = []
-    debtor_matches = defaultdict(list)
-    for i, tx in enumerate(matches):
-        debtor_matches[tx["From"]].append(i)
-
-    for debtor, idxs in debtor_matches.items():
-        for idx in list(idxs):
-            amt = matches[idx]["Amount"]
-            if amt < min_peer_txn:
-                need = min_peer_txn - amt
-                donor = next(
-                    (j for j in idxs if j != idx and matches[j]["Amount"] >= min_peer_txn + need),
-                    None
-                )
-                if donor is not None:
-                    matches[donor]["Amount"] = round(matches[donor]["Amount"] - need, 2)
-                    matches[idx]["Amount"]   = round(matches[idx]["Amount"] + need, 2)
-                else:
-                    to_bank.append(matches[idx])
-                    matches[idx]["Amount"] = 0.0
-
-    peer_txns = [tx for tx in matches if tx["Amount"] >= min_peer_txn]
-
-    # 8) Return any dropped small matches into pools
-    for tx in to_bank:
-        amt = tx["Amount"] or 0.0
-        for d in debtors:
-            if d[0] == tx["From"]:
-                d[1] += amt
-                break
-        for c in creditors:
-            if c[0] == tx["To"]:
-                c[1] += amt
-                break
-
-    # 9) Finalize: peer-to-peer ≥ $1, then bank settles all pennies
-    final_txns = list(peer_txns)
-    for name, amt in creditors[idx_c:]:
-        if amt > 1e-6:
-            final_txns.append({"From": bank_name, "To": name, "Amount": round(amt, 2)})
-    for name, amt in debtors[idx_d:]:
-        if amt > 1e-6:
-            final_txns.append({"From": name, "To": bank_name, "Amount": round(amt, 2)})
-
-    # 10) Attach receiver’s payment handle in "Method" column and format message
-    for tx in final_txns:
-        # strip any parenthetical and lowercase for lookup
-        to_key = str(tx["To"]).split("(", 1)[0].strip().lower()
-        row    = pm_map.get(to_key)
-
-        # default to Venmo if no row
-        platform = "Venmo"
-        handle   = ""
-
-        if row is not None:
-            for col in ("Venmo", "Zelle", "Cashapp", "ApplePay"):
-                val = row.get(col, "")
-                if pd.notnull(val) and str(val).strip():
-                    platform = col
-                    handle   = str(val).strip()
-                    break
-
-        amt = tx["Amount"]
-        if handle:
-            tx["Method"] = f"Pay user {amt:.2f} on {platform}: {handle}"
-        else:
-            tx["Method"] = f"Pay user {amt:.2f} on {platform}"
-
-    # 11) Write out CSV with Method
-    out_dir = os.path.join(project_root, "Transactions")
-    os.makedirs(out_dir, exist_ok=True)
-    base     = os.path.splitext(os.path.basename(csv_path))[0]
-    out_path = os.path.join(out_dir, f"{base}_transactions.csv")
-    pd.DataFrame(final_txns).to_csv(out_path, index=False)
-
-    print(f"[✓] Wrote {len(final_txns)} transactions "
-          f"(bank-limited strategy dr={debt_rev}, cr={cred_rev}) to:\n    {out_path}")
+# def parse_currency(val):
+#     if pd.isnull(val):
+#         return 0.0
+#     if isinstance(val, (int, float)):
+#         return float(val)
+#     s = str(val).replace('$', '').replace(',', '').strip()
+#     try:
+#         return float(s)
+#     except ValueError:
+#         return 0.0
 
 
-def main():
-    p = argparse.ArgumentParser(
-        description="Poker Ledger Payout System — outputs receiver’s payment handle"
-    )
-    p.add_argument("--csv",      required=True,
-                   help="Path to your ledger CSV (e.g. 'Ledger Data/6_30_25.csv')")
-    p.add_argument("--bank-name", default="BANK",
-                   help="Label for host/bank on any settlements")
-    p.add_argument("--min-peer",  type=float, default=1.0,
-                   help="Minimum peer-to-peer txn amount ($1 by default)")
-    args = p.parse_args()
+# def settle_transactions(csv_path, bank_name="BANK", min_peer_txn=1.0):
+#     # 1) Load ledger CSV
+#     df = pd.read_csv(csv_path)
 
-    settle_transactions(
-        args.csv,
-        bank_name=args.bank_name,
-        min_peer_txn=args.min_peer
-    )
+#     # 2) Load Payment Methods, build pm_map: discord → full row or None
+#     abs_csv      = os.path.abspath(csv_path)
+#     ledger_dir   = os.path.dirname(abs_csv)
+#     project_root = os.path.dirname(ledger_dir)
+
+#     pm_path = None
+#     for dname in ("Payment Types", "Payment Type"):
+#         candidate = os.path.join(project_root, dname, "Payment Methods.csv")
+#         if os.path.isfile(candidate):
+#             pm_path = candidate
+#             break
+
+#     if pm_path is None:
+#         print("✗ Error: cannot find Payment Methods.csv. Looked in:")
+#         print(f"  • {os.path.join(project_root, 'Payment Types', 'Payment Methods.csv')}")
+#         print(f"  • {os.path.join(project_root, 'Payment Type',  'Payment Methods.csv')}")
+#         sys.exit(1)
+
+#     pm_df = pd.read_csv(pm_path)
+#     pm_map = {}
+#     for _, row in pm_df.iterrows():
+#         entry = str(row["Player Name"]).strip()
+#         lower = entry.lower()
+#         if "(" in entry and ")" in entry:
+#             before = entry.split("(", 1)[0].strip().lower()
+#             inside = entry.split("(", 1)[1].split(")", 1)[0].strip().lower()
+#             pm_map[before] = row
+#             pm_map[inside] = row
+#         else:
+#             pm_map[lower] = row
+
+#     # 3) Warn about missing players but default them to Venmo
+#     missing = []
+#     for full in df["Player Name"].unique():
+#         if pd.isnull(full):
+#             continue
+#         full_str = str(full).strip()
+#         if not full_str:
+#             continue
+#         discord = full_str.split("(", 1)[0].strip().lower()
+#         if discord not in pm_map:
+#             missing.append(discord)
+#             pm_map[discord] = None
+
+#     if missing:
+#         print("⚠ Warning: no payment methods found for these players; defaulting them to Venmo:")
+#         for name in missing:
+#             print(f"  • {name}")
+
+#     # 4) Build raw debtor & creditor pools
+#     base_debtors   = []
+#     base_creditors = []
+#     for _, row in df.iterrows():
+#         name       = row["Player Name"]
+#         credit_yes = str(row["Credit?"]).strip().lower() == "yes"
+#         end_stack  = parse_currency(row["Ending Stack"])
+#         pl         = parse_currency(row["P/L Player"])
+#         send_out   = parse_currency(row["Send Out"])
+#         sent       = parse_currency(row["$ Sent"])
+
+#         if not credit_yes and end_stack > 0 and sent > 0:
+#             base_creditors.append([name, sent])
+#         elif credit_yes:
+#             if pl < 0 and abs(send_out) > 0:
+#                 base_debtors.append([name, abs(send_out)])
+#             elif pl > 0 and sent > 0:
+#                 base_creditors.append([name, sent])
+
+#     # 5) Greedy-match helper
+#     def simulate(dr, cr):
+#         debtors   = [d.copy() for d in base_debtors]
+#         creditors = [c.copy() for c in base_creditors]
+#         debtors.sort(key=lambda x: x[1], reverse=dr)
+#         creditors.sort(key=lambda x: x[1], reverse=cr)
+
+#         matches = []
+#         i = j = 0
+#         while i < len(debtors) and j < len(creditors):
+#             dn, da = debtors[i]
+#             cn, ca = creditors[j]
+#             x = min(da, ca)
+#             matches.append({"From": dn, "To": cn, "Amount": round(x, 2)})
+#             debtors[i][1]   -= x
+#             creditors[j][1] -= x
+#             if debtors[i][1]   < 1e-6:
+#                 i += 1
+#             if creditors[j][1] < 1e-6:
+#                 j += 1
+
+#         leftover_bank = sum(1 for k in range(i, len(debtors))   if debtors[k][1]   > 1e-6)
+#         leftover_bank += sum(1 for k in range(j, len(creditors)) if creditors[k][1] > 1e-6)
+#         return leftover_bank, len(matches) + leftover_bank, matches, debtors, creditors, i, j
+
+#     # 6) Pick best sort-order strategy
+#     best = None
+#     for dr, cr in itertools.product([True, False], repeat=2):
+#         lb, tt, m, dl, cl, di, cj = simulate(dr, cr)
+#         if best is None or (lb, tt) < best[0]:
+#             best = ((lb, tt), dr, cr, m, dl, cl, di, cj)
+
+#     (_, _), debt_rev, cred_rev, matches, debtors, creditors, idx_d, idx_c = best
+
+#     # 7) Split any < $1 peer matches by borrowing cents
+#     to_bank = []
+#     debtor_matches = defaultdict(list)
+#     for i, tx in enumerate(matches):
+#         debtor_matches[tx["From"]].append(i)
+
+#     for debtor, idxs in debtor_matches.items():
+#         for idx in list(idxs):
+#             amt = matches[idx]["Amount"]
+#             if amt < min_peer_txn:
+#                 need = min_peer_txn - amt
+#                 donor = next(
+#                     (j for j in idxs if j != idx and matches[j]["Amount"] >= min_peer_txn + need),
+#                     None
+#                 )
+#                 if donor is not None:
+#                     matches[donor]["Amount"] = round(matches[donor]["Amount"] - need, 2)
+#                     matches[idx]["Amount"]   = round(matches[idx]["Amount"] + need, 2)
+#                 else:
+#                     to_bank.append(matches[idx])
+#                     matches[idx]["Amount"] = 0.0
+
+#     peer_txns = [tx for tx in matches if tx["Amount"] >= min_peer_txn]
+
+#     # 8) Return any dropped small matches into pools
+#     for tx in to_bank:
+#         amt = tx["Amount"] or 0.0
+#         for d in debtors:
+#             if d[0] == tx["From"]:
+#                 d[1] += amt
+#                 break
+#         for c in creditors:
+#             if c[0] == tx["To"]:
+#                 c[1] += amt
+#                 break
+
+#     # 9) Finalize: peer-to-peer ≥ $1, then bank settles all pennies
+#     final_txns = list(peer_txns)
+#     for name, amt in creditors[idx_c:]:
+#         if amt > 1e-6:
+#             final_txns.append({"From": bank_name, "To": name, "Amount": round(amt, 2)})
+#     for name, amt in debtors[idx_d:]:
+#         if amt > 1e-6:
+#             final_txns.append({"From": name, "To": bank_name, "Amount": round(amt, 2)})
+
+#     # 10) Attach receiver’s payment handle in "Method" column and format message
+#     for tx in final_txns:
+#         # strip any parenthetical and lowercase for lookup
+#         to_key = str(tx["To"]).split("(", 1)[0].strip().lower()
+#         row    = pm_map.get(to_key)
+
+#         # default to Venmo if no row
+#         platform = "Venmo"
+#         handle   = ""
+
+#         if row is not None:
+#             for col in ("Venmo", "Zelle", "Cashapp", "ApplePay"):
+#                 val = row.get(col, "")
+#                 if pd.notnull(val) and str(val).strip():
+#                     platform = col
+#                     handle   = str(val).strip()
+#                     break
+
+#         amt = tx["Amount"]
+#         if handle:
+#             tx["Method"] = f"Pay user {amt:.2f} on {platform}: {handle}"
+#         else:
+#             tx["Method"] = f"Pay user {amt:.2f} on {platform}"
+
+#     # 11) Write out CSV with Method
+#     out_dir = os.path.join(project_root, "Transactions")
+#     os.makedirs(out_dir, exist_ok=True)
+#     base     = os.path.splitext(os.path.basename(csv_path))[0]
+#     out_path = os.path.join(out_dir, f"{base}_transactions.csv")
+#     pd.DataFrame(final_txns).to_csv(out_path, index=False)
+
+#     print(f"[✓] Wrote {len(final_txns)} transactions "
+#           f"(bank-limited strategy dr={debt_rev}, cr={cred_rev}) to:\n    {out_path}")
 
 
-if __name__ == "__main__":
-    main()
+# def main():
+#     p = argparse.ArgumentParser(
+#         description="Poker Ledger Payout System — outputs receiver’s payment handle"
+#     )
+#     p.add_argument("--csv",      required=True,
+#                    help="Path to your ledger CSV (e.g. 'Ledger Data/7_2_25.csv')")
+#     p.add_argument("--bank-name", default="BANK",
+#                    help="Label for host/bank on any settlements")
+#     p.add_argument("--min-peer",  type=float, default=1.0,
+#                    help="Minimum peer-to-peer txn amount ($1 by default)")
+#     args = p.parse_args()
+
+#     settle_transactions(
+#         args.csv,
+#         bank_name=args.bank_name,
+#         min_peer_txn=args.min_peer
+#     )
+
+
+# if __name__ == "__main__":
+#     main()
