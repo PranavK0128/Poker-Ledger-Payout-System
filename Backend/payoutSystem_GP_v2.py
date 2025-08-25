@@ -6,8 +6,7 @@ Backend/payoutSystem_v7.py
 • Hard cap: **3 outgoing transfers** per ledger row.
 • Overflow always goes to BANK, which then fans out to creditors.
 • 3-cycle cancellation removes round-robin edges.
-• Name-normalisation makes PAYMENT-METHOD lookup *case-insensitive* and
-  ignores/uses parentheses intelligently, so all handles appear.
+• Name-normalisation makes PAYMENT-METHOD lookup *case-insensitive* and ignores/uses parentheses intelligently, so all handles appear.
 • No rounding – exact cents preserved.
 """
 
@@ -295,8 +294,7 @@ def main() -> None:
                 method_string(to_disp, amt, pay_db)
             ])
 
-    print(f"✅  Wrote {out_path.relative_to(root_dir)} "
-          f"({len(transfers)} transfers, cap ≤3 achieved)")
+    print(f"✅  Wrote {out_path.relative_to(root_dir)} "f"({len(transfers)} transfers, cap ≤3 achieved)")
 
 if __name__ == "__main__":
     main()
